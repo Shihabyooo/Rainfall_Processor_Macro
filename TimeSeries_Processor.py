@@ -1,8 +1,11 @@
-#TODO handle negative (error) values when computing aggregates in GaugeDataset and TSYear classes
+#TODO for averages, make Calc display figures rounded to 1 decimal (don't do rounding in python.)
+
+#Note: zeroes are considered actual values, distinct from "empty" cells, which are considered missing records.
+#Some part of this script handles missing records as negatives (-1) internally.
 
 import uno
 import datetime
-from calendar import monthrange
+from calendar import monthrange, isleap
 
 from com.sun.star.table.CellContentType import EMPTY, VALUE, TEXT, FORMULA
 
@@ -69,15 +72,25 @@ def Main():
         sheet.getCellByPosition(11, row).Value = currentYear
 
         #in case an entire year had missing records. There would be no entry in the dataset dictionary
+        #we still should write the month id column and missing records, so a mini version of the inner loop is repeated here. Not elegant, but will do...
         if (not(currentYear in dataSet.records)):
+            for month in range (1, 13):
+                sheet.getCellByPosition(4, month + (12 * (row - 1))).Value = month
+                sheet.getCellByPosition(9, month + (12 * (row - 1))).Value = monthrange(currentYear, month)[1]
+            sheet.getCellByPosition(15, row).Value = 365 + isleap(currentYear)
             continue
 
         #inner loop for monthly data
         for month in range (1, 13):
+            maxDailyMonth = dataSet.records[currentYear].GetMaxDailyMonth(month)
+            avgMonthly = dataSet.records[currentYear].GetAverageRainMonth(month)
+
             sheet.getCellByPosition(4, month + (12 * (row - 1))).Value = month
             sheet.getCellByPosition(5, month + (12 * (row - 1))).Value = dataSet.records[currentYear].GetTotalRainfallMonth(month)
-            sheet.getCellByPosition(6, month + (12 * (row - 1))).Value = dataSet.records[currentYear].GetMaxDailyMonth(month)
-            sheet.getCellByPosition(7, month + (12 * (row - 1))).Value = dataSet.records[currentYear].GetAverageRainMonth(month)
+            if (maxDailyMonth >= 0):
+                sheet.getCellByPosition(6, month + (12 * (row - 1))).Value = maxDailyMonth
+            if (avgMonthly>= 0):
+                sheet.getCellByPosition(7, month + (12 * (row - 1))).Value = avgMonthly
             sheet.getCellByPosition(8, month + (12 * (row - 1))).Value = dataSet.records[currentYear].GetRainyDaysMonth(month)
             sheet.getCellByPosition(9, month + (12 * (row - 1))).Value = dataSet.records[currentYear].GetMissingRecordsMonth(month)
         
@@ -120,20 +133,27 @@ class GaugeDataset:
         counter : int = 0
 
         for key, value in self.records.items():
-            average += value.GetTotalRainfallMonth(month)
-            counter += 1
+            if (value.GetTotalRainfallMonth(month) >= 0):
+                average += value.GetTotalRainfallMonth(month)
+                counter += 1
 
-        return average / counter
+        if(counter > 0):
+            return average / counter
+        else:
+            return -1
     
     def GetAverageMaxDailyRainfallMonth(self, month : int):
         average : float = 0
         counter : int = 0
 
         for key, value in self.records.items():
-            average += value.GetMaxDailyMonth(month)
-            counter += 1
-
-        return average / counter
+            if (value.GetMaxDailyMonth(month) >= 0):
+                average += value.GetMaxDailyMonth(month)
+                counter += 1
+        if(counter > 0):
+            return average / counter
+        else:
+            return -1
 
     
 #TODO add a conditional based on missing records. Set a threshold for missing records over which the month (or year) is excluded from averages/totals.
@@ -173,10 +193,10 @@ class TSYear:
             totalDays += self.GetRainyDaysMonth(month)
         return totalDays
 
-    def GetMaxDailyMonth(self, month : int):
+    def GetMaxDailyMonth(self, month : int): #returns -1 if there was no records for month
         return self.recordExtra[month][2]
 
-    def GetMaxDailyAnnum(self):
+    def GetMaxDailyAnnum(self): #returns negative value for error cases (i.e. there was no records for entire year)
         maxVal : int = -1
         for month in range(1, 13):
             maxVal = max(self.GetMaxDailyMonth(month), maxVal)
@@ -188,7 +208,7 @@ class TSYear:
     def GetTotalRainfallAnnum(self):
         totalRain : int = 0
         for month in range(1, 13):
-            totalRain += self.GetTotalRainfallMonth(month)
+            totalRain += max(self.GetTotalRainfallMonth(month), 0) #to filter out the possible negative (no record) values.
         return totalRain
     
     def GetAverageRainMonth(self, month : int):
